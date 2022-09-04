@@ -10,9 +10,9 @@
 zulu jdk version: 11.35.13
 ```
 
-下载链接
+官方下载链接：
 
-
+[Java Download | Java 8, Java 11, Java 13 - Linux, Windows & macOS (azul.com)](https://www.azul.com/downloads/?version=java-11-lts&package=jdk&show-old-builds=true)
 
 #### 启动命令
 
@@ -236,18 +236,13 @@ run:834, Thread (java.lang)
 
    zulu 在引入 这个优化的时候，又添加了一些自己的想法，比如 弱引用，故导致了这个内存泄漏的问题。
 
-2.  如果因为一些原因不能更换JDK版本的话，由于这个类为java.base模块，默认修饰符，并且未对外暴露，可以尝试修改类字节码解决。将javax.crypto.JceSecurity.IdentityWrapper 修改成这样。
+2. 如果因为一些原因不能更换JDK版本的话，由于这个类为java.base模块，默认修饰符，并且未对外暴露，可以尝试修改类字节码解决。将javax.crypto.JceSecurity.IdentityWrapper 修改成这样。
 
+   ​       我提供了一个agent来解决该问题。[javaagent](https://github.com/paimonx/issueAnalysis/blob/main/issue-example/patch-agent/target/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar)
 
-   我提供了一个agent 来使用这个方式来解决。
-   
-
-   
-   ```shell
-   -javaagent:{path}/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar
-   ```
-   
-   [hahhaahah]: ../patch-agent/target/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar
+      ```shell
+      -javaagent:{path}/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar
+      ```
 
 ```
     private static final class IdentityWrapper {

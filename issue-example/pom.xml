@@ -13,5 +13,6 @@
 
     <modules>
         <module>zulu-jdk-memory-leak</module>
+        <module>patch-agent</module>
     </modules>
 </project>
