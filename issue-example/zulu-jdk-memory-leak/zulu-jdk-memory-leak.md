@@ -10,7 +10,7 @@
 zulu jdk version: 11.35.13
 ```
 
-官方下载链接：
+zulu JDK官方下载链接：
 
 [Java Download | Java 8, Java 11, Java 13 - Linux, Windows & macOS (azul.com)](https://www.azul.com/downloads/?version=java-11-lts&package=jdk&show-old-builds=true)
 

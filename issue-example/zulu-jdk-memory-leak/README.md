@@ -3,7 +3,7 @@
 
  只要使用zulu jdk 11.35.13 运行该工程，即可复现问题。
 
- [详细分析](../zulu-jdk-memory-leak/zulu-jdk-memory-leak.md)
+ [详细分析](zulu-jdk-memory-leak.md)
 
 
 # 目录结构
