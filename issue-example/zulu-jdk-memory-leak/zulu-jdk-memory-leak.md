@@ -28,7 +28,7 @@ zulu JDK官方下载链接：
 
 使用visualvm 分析堆转储文件。
 
-![image-20220824153146644](./zulu-jdk-memory-leak.assets/image-20220824153146644.png)
+![image-20220824153146644](zulu-jdk-memory-leak.assets/image-20220824153146644.png)
 
 分析可得 javax.crypto.JceSecurity 类 数据异常。 
 
