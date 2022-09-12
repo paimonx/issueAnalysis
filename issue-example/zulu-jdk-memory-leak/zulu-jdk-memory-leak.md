@@ -42,7 +42,7 @@ zulu JDK官方下载链接：
 
 ![image-20220824154415306](zulu-jdk-memory-leak.assets/image-20220824154415306.png)
 
-因为 **verificationResults** 这个属性是 **静态**的，那么他可以做为GC Root。 而这个属性是个map,并且在程序执行中，在不断的扩张，又因为他是GC Root ，所以他不会被回收，被他所引用的对象也不会被GC 回收。
+因为 **verificationResults** 这个属性是 **静态**的，那么他可以做为GC Root。 而这个属性是个map,并且在程序执行中，在不断的扩张，又因为他是GC Root ，所以他不会被回收，被他所引用的对象也不会被GC 回收，所以导致了 **ConcurrentHashMap$Node, java.lang.ref.WeakReference,javax.crypto.JceSecurity.IdentityWrapper**这三个类的实例数不断增加。
 
 在调用中仅有一个地方在对该map 进行put，所以在那个方法上加个断点，分析下栈调用，具体是由那一步引起的。
 
