@@ -30,19 +30,21 @@ zulu JDK官方下载链接：
 
 ![image-20220824153146644](zulu-jdk-memory-leak.assets/image-20220824153146644.png)
 
-分析可得 javax.crypto.JceSecurity 类 数据异常。 
-
-  尤其是 verificationResults 占据了绝大部分的内存。这个包是和 加密相关的。
+分析可得 **ConcurrentHashMap$Node, java.lang.ref.WeakReference,javax.crypto.JceSecurity.IdentityWrapper**, 这三个类的实例数量不正常，并且  **javax.crypto.JceSecurity** 类 的 GC Root 占比超过96%。 
 
 ![image-20220824153452456](zulu-jdk-memory-leak.assets/image-20220824153452456.png)
+
+尤其是 该类中**verificationResults** 属性 占据了绝大部分的内存。
+
+查阅资料，了解到 **javax.crypto.JceSecurity** 这个类是与加密息息相关的。
 
 ### 原因分析
 
 ![image-20220824154415306](zulu-jdk-memory-leak.assets/image-20220824154415306.png)
 
-因为 verificationResults 这个属性是 静态的，那么他可以做为GC Root。 而这个属性是个map,并且在程序执行中，在不断的扩张，又因为他是GC Root 所以他不会被回收，他的直接引用也不会被GC 回收。
+因为 **verificationResults** 这个属性是 **静态**的，那么他可以做为GC Root。 而这个属性是个map,并且在程序执行中，在不断的扩张，又因为他是GC Root ，所以他不会被回收，被他所引用的对象也不会被GC 回收。
 
-幸运的是，在调用中只有一个地方在对该map 进行put，所以在那个方法上加个断点，看下栈调用，具体是由那一步引起的。
+在调用中仅有一个地方在对该map 进行put，所以在那个方法上加个断点，分析下栈调用，具体是由那一步引起的。
 
 ------
 
@@ -55,6 +57,7 @@ getInstance:540, Cipher (javax.crypto)
 encrypt:28, AesUtils (com.paimonx.zulu.util)
 encrypt:23, AesUtils (com.paimonx.zulu.util)
 demo:24, DemoController (com.paimonx.zulu.controller)
+
 invoke0:-1, NativeMethodAccessorImpl (jdk.internal.reflect)
 invoke:62, NativeMethodAccessorImpl (jdk.internal.reflect)
 invoke:43, DelegatingMethodAccessorImpl (jdk.internal.reflect)
@@ -111,17 +114,17 @@ run:61, TaskThread$WrappingRunnable (org.apache.tomcat.util.threads)
 run:834, Thread (java.lang)
 ```
 
-发现这两个方法都会调用  javax.crypto.JceSecurity#getVerificationResult 方法。
+发现 **AesUtils**  类中，这两个方法都会调用  **javax.crypto.JceSecurity#getVerificationResult** 方法，然后一直向 map 中新增元素 。
 
 ![image-20220824155500024](zulu-jdk-memory-leak.assets/image-20220824155500024.png)
 
-也就是说 一次加密会调用2次，通过visualvm 观察其中元素数量，发现是符合2倍规律的，所以问题就是有加密触发的。
+也就是说 一次加密会调用2次，通过visualvm 观察其中元素数量，发现是符合2倍规律的，所以问题就是通过加密触发的。
 
 ### 但是这个map为什么会无限制扩张呢？map 中的元素又都是什么呢？
 
 ![image-20220824153704616](zulu-jdk-memory-leak.assets/image-20220824153704616.png)
 
-分析发现 map 中的值都是 javax.crypto.JceSecurity.IdentityWrapper 的实例，但是又能看到最内部的实例 都是 SunJce 的 同一个实例。
+分析发现 map 中的值都是 javax.crypto.JceSecurity.IdentityWrapper 的实例，但是又能看到最内部的实例 都是 **SunJce** 的 同一个实例。
 
 #### 源码分析
 
@@ -173,11 +176,11 @@ run:834, Thread (java.lang)
     }
 ```
 
-稍微理解下源码，可以知道 verificationResults 就是  缓存的作用， 对于javax.crypto.JceSecurity#getVerificationResult 方法来说就是 同一个入参 SunJce 实例 在  verificationResults 中应该存在唯一一个元素与其对应。
+稍微理解下源码，可以知道 verificationResults 就是  **缓存** 的作用， 对于**javax.crypto.JceSecurity#getVerificationResult** 方法来说就是 **同一个入参 SunJce 实例 在  verificationResults 中应该存在唯一一个元素与其对应**。
 
-**而现在很明显不是这样的， 堆转储文件中 针对同一个 SunJce#1 存多个元素与其对应，并且还在以 每执行一次加密逻辑都增加2个元素的速度在增长。**从而导致了内存泄漏，以至最终oom。
+**而现在很明显不是这样的， 堆转储文件中 针对同一个 SunJce#1 存多个元素与其对应，并且还在以 每执行一次加密逻辑都增加2个元素的速度在增长。**而**verificationResults**还是GC Root,所以不会被回收，从而导致了内存泄漏，以至最终oom。
 
-**所以javax.crypto.JceSecurity.IdentityWrapper 这个内部类设计存在缺陷。**
+**逻辑中明明先通过DCL 判断 Provider 实例 是否已经被缓存，但是2次get 都没获取到。所以javax.crypto.JceSecurity.IdentityWrapper 这个内部类设计存在缺陷。**
 
 ```
  private static final class IdentityWrapper {
@@ -216,33 +219,33 @@ run:834, Thread (java.lang)
 
 **略读源码可以发现， equals(Object o) 方法 对比的是  弱引用所引用的对象的，即 SunJce#1 == SunJce#1。**
 
-**但是hashCode() 返回的确是 弱引用的hash，通过构造器可以知道每次调用构造器都会生成一个新的弱引用，几乎是不会相同的。**
+**但是hashCode() 返回的确是弱引用（new WeakReference<Provider>(obj) 的hash，通过构造器可以知道每次调用构造器都会生成一个新的弱引用，所以hashCode 是不会相同的。**
 
-**ConcurrentHashMap 和 hashmap 的逻辑就是先比较hash,再比较equals。** 
+**ConcurrentHashMap 和 hashmap 的逻辑都是先比较hash,再比较equals。** 
 
-**而现在相同的对象（SunJce#1） 没有相同的hash 所以会一直get 不到，所以会一直put 新的进来，从而导致内存泄漏。**
+**而现在相同的对象（SunJce#1）在经过 javax.crypto.JceSecurity.IdentityWrapper 封装后， 没有相同的hash 所以会一直get 不到，所以会一直put 新的元素进来，从而导致了内存泄漏。**
 
-**所以hashCode()方法应该返回 SunJce#1 的hash。**
+**所以javax.crypto.JceSecurity.IdentityWrapper#hashCode方法应该返回 SunJce#1 的hashCode。**
 
 ------
 
 #### 解决方案
 
-1. （建议）更换 JDK版本，这个问题发生在zulu 11.35.13 版本中，跟换小版本就能解决这个问题，（已验证 11.33.15，11.35.15不存在这样的问题。）
+1. （建议）更换 JDK版本，这个问题发生在zulu 11.35.13 版本中，更换JDK小版本就能解决这个问题，（已验证 11.33.15，11.35.15不存在这样的问题。）
 
-   在这个版本中 open jdk 对javax.crypto.JceSecurity#getVerificationResult 做个些优化，有原先的锁整个方法，换成了锁代码块。
+   在这个版本中 open jdk 对javax.crypto.JceSecurity#getVerificationResult 做个些优化，有原先的锁整个方法，降低了锁的粒度，换成了锁代码块。
 
    [7107615: scalability bloker in javax.crypto.JceSecurity · openjdk/jdk@74d45e4 (github.com)](https://github.com/openjdk/jdk/commit/74d45e481d1ad6aa5d7c6315ea86681e1a978ce0)
 
-   zulu 在引入 这个优化的时候，又添加了一些自己的想法，比如 弱引用，故导致了这个内存泄漏的问题。
+   zulu JDK 在引入 这个优化的时候，又添加了一些自己的想法，故导致了这个内存泄漏的问题。
 
-2. 如果因为一些原因不能更换JDK版本的话，由于这个类为java.base模块，默认修饰符，并且未对外暴露，可以尝试修改类字节码解决。将javax.crypto.JceSecurity.IdentityWrapper 修改成这样。
+2. 如果因为一些原因不能更换JDK版本的话。并且 由于这个类为**java.base**模块，**默认修饰符**，并且**未对外暴露**，可以尝试**修改类字节码**解决。将javax.crypto.JceSecurity.IdentityWrapper 修改成这样。
 
-   ​       我提供了一个agent来解决该问题。[javaagent](https://github.com/paimonx/issueAnalysis/blob/main/issue-example/patch-agent/target/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar)
+   我提供了一个agent来解决该问题。[javaagent](https://github.com/paimonx/issueAnalysis/blob/main/issue-example/patch-agent/target/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar)
 
-      ```shell
+   ```shell
       -javaagent:{path}/patch-agent-1.0-SNAPSHOT-jar-with-dependencies.jar
-      ```
+   ```
 
 ```
     private static final class IdentityWrapper {
@@ -284,3 +287,12 @@ run:834, Thread (java.lang)
     }
 ```
 
+####  附录：弱引用 WeakReference   
+
+当一个对象a **仅** 被弱引用 B所引用时，那在GC 时,对象a 会被回收,。
+
+在当前案例中，GC Root **javax.crypto.JceSecurity#verificationResults** 与 **javax.crypto.JceSecurity.IdentityWrapper#obj**存在的是 **强引用**，
+
+**javax.crypto.JceSecurity.IdentityWrapper#obj**与 **SunJce#1** 存在的是**弱引用**； ~~GC 时 **SunJce#1** 应该被回收 ！！~~
+
+但是 **SunJce#1** 与 **com.sun.crypto.provider.SunJCE#instance** 之间还存在**强引用**，**com.sun.crypto.provider.SunJCE#instance** 也是GC Root ,所以 **SunJce#1**不会被回收。
